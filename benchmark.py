@@ -233,7 +233,7 @@ def main(local_rank, args):
                     val_grid_int[count][:, 2]].flatten(),
                     val_pt_labs[count])
             val_loss_list.append(loss.detach().cpu().numpy())
-            if i_iter_val % print_freq == 0 and dist.get_rank() == 0:
+            if i_iter_val % print_freq == 0 and local_rank == 0:
                 logger.info('[EVAL] Epoch %d Iter %5d: Loss: %.3f (%.3f)'%(
                     epoch, i_iter_val, loss.item(), np.mean(val_loss_list)))
     
