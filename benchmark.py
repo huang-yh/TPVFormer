@@ -412,4 +412,7 @@ if __name__ == '__main__':
     args.gpus = ngpus
     print(args)
 
-    torch.multiprocessing.spawn(main, args=(args,), nprocs=args.gpus)
+    if ngpus > 1:
+        torch.multiprocessing.spawn(main, args=(args,), nprocs=args.gpus)
+    else:
+        main(0, args)
