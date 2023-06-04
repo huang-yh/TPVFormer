@@ -3,6 +3,7 @@ _base_ = [
     './_base_/optimizer.py',
     './_base_/schedule.py',
 ]
+model_type = '10'
 
 occupancy = False
 lovasz_input = 'points'

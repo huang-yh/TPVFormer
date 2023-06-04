@@ -59,10 +59,10 @@ def main(local_rank, args):
     logger.info(f'Config:\n{cfg.pretty_text}')
 
     # build model
-    if cfg.get('occupancy', False):
-        from builder import tpv_occupancy_builder as model_builder
+    if cfg.get('model_type', '10') == '04':
+        from builder import tpv04_builder as model_builder
     else:
-        from builder import tpv_lidarseg_builder as model_builder
+        from builder import tpv10_builder as model_builder
     
     my_model = model_builder.build(cfg.model)
     n_parameters = sum(p.numel() for p in my_model.parameters() if p.requires_grad)

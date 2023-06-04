@@ -3,6 +3,7 @@ _base_ = [
     './_base_/optimizer.py',
     './_base_/schedule.py',
 ]
+model_type = '04'
 
 dataset_params = dict(
     version = "v1.0-trainval",

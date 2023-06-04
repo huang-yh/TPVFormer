@@ -1,38 +1,34 @@
-_base_ = [
-    './_base_/dataset.py',
-    './_base_/optimizer.py',
-    './_base_/schedule.py',
-]
+_base_ = ['./base.py']
 model_type = '10'
-
-occupancy = False
-lovasz_input = 'points'
-ce_input = 'voxel'
-
-point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+# If point cloud range is changed, the models should also change their point
+# cloud range accordingly
+point_cloud_range = [-25.6, 0., -2, 25.6, 51.2, 4.4]
+voxel_size = [0.2, 0.2, 8]
 
 _dim_ = 96
 num_heads = 6
-_pos_dim_ = [36, 36, 24]
+# _pos_dim_ = [int(_dim_/8*3), int(_dim_/8*3), int(_dim_/8*2)]
+_pos_dim_ = _dim_ // 3
 _ffn_dim_ = _dim_ * 2
 _num_levels_ = 4
-_num_cams_ = 6
+_num_cams_ = 1
 
-tpv_h_ = 150
-tpv_w_ = 150
+tpv_h_ = 128
+tpv_w_ = 128
 tpv_z_ = 16
-scale_h = 1
-scale_w = 1
-scale_z = 1
-tpv_encoder_layers = 3
-num_points_in_pillar = [3, 24, 24]
-num_points = [6, 48, 48]
-hybrid_attn_anchors = 8
-hybrid_attn_points = 16
+scale_h = 2
+scale_w = 2
+scale_z = 2
+tpv_encoder_layers = 5
+num_points_in_pillar = [4, 32, 32]
+num_points = [8, 64, 64]
+hybrid_attn_anchors = 16
+hybrid_attn_points = 32
 hybrid_attn_init = 1
+nbr_class = 20
 
-grid_size = [tpv_h_*scale_h, tpv_w_*scale_w, tpv_z_*scale_z]
-nbr_class = 17
+feature = _dim_
+project_scale = 2
 
 self_cross_layer = dict(
     type='TPVFormerLayer',
@@ -95,7 +91,6 @@ self_layer = dict(
     operation_order=('self_attn', 'norm', 'ffn', 'norm')
 )
 
-
 model = dict(
     type='TPVFormer',
     use_grid_mask=True,
@@ -110,27 +105,9 @@ model = dict(
         out_dims=_dim_,
         scale_h=scale_h,
         scale_w=scale_w,
-        scale_z=scale_z
+        scale_z=scale_z,
+        use_checkpoint=False
     ),
-    img_backbone=dict(
-        type='ResNet',
-        depth=101,
-        num_stages=4,
-        out_indices=(1, 2, 3),
-        frozen_stages=1,
-        norm_cfg=dict(type='BN2d', requires_grad=False),
-        norm_eval=True,
-        style='caffe',
-        dcn=dict(type='DCNv2', deform_groups=1, fallback_on_stride=False), # original DCNv2 will print log when perform load_state_dict
-        stage_with_dcn=(False, False, True, True)),
-    img_neck=dict(
-        type='FPN',
-        in_channels=[512, 1024, 2048],
-        out_channels=_dim_,
-        start_level=0,
-        add_extra_convs='on_output',
-        num_outs=4,
-        relu_before_extra_convs=True),
     tpv_head=dict(
         type='TPVFormerHead',
         tpv_h=tpv_h_,
@@ -154,8 +131,8 @@ model = dict(
                 self_cross_layer,
                 self_cross_layer,
                 self_cross_layer,
-                # self_layer,
-                # self_layer,
+                self_layer,
+                self_layer,
             ]),
         positional_encoding=dict(
             type='CustomPositionalEncoding',

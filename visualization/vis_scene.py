@@ -217,10 +217,10 @@ if __name__ == "__main__":
     # prepare model
     logger = mmcv.utils.get_logger('mmcv')
     logger.setLevel("WARNING")
-    if cfg.get('occupancy', False):
-        from builder import tpv_occupancy_builder as model_builder
+    if cfg.get('model_type', '10') == '04':
+        from builder import tpv04_builder as model_builder
     else:
-        from builder import tpv_lidarseg_builder as model_builder
+        from builder import tpv10_builder as model_builder
     my_model = model_builder.build(cfg.model).to(device)
     if args.ckpt_path:
         ckpt = torch.load(args.ckpt_path, map_location='cpu')
