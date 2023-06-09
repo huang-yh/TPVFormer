@@ -3,13 +3,17 @@ import numpy as np
 import torch
 import numba as nb
 from torch.utils import data
+import sys
+sys.path.insert(0, '/data1/code/hyh/github/TPVFormer')
+
 from dataloader.transform_3d import PadMultiViewImage, NormalizeMultiviewImage, \
     PhotoMetricDistortionMultiViewImage, RandomScaleImageMultiViewImage
 
 
 img_norm_cfg = dict(
     mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0], to_rgb=False)
-
+pytorch_img_norm_cfg = dict(
+    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 
 class DatasetWrapper_NuScenes(data.Dataset):
     def __init__(self, in_dataset, grid_size, fill_label=0,
@@ -75,13 +79,14 @@ class DatasetWrapper_NuScenes(data.Dataset):
         crop_range = max_bound - min_bound
         cur_grid_size = self.grid_size                 # 200, 200, 16
         # TODO: intervals should not minus one.
-        intervals = crop_range / (cur_grid_size - 1)   
+        # intervals = crop_range / (cur_grid_size - 1)  
+        intervals = crop_range / cur_grid_size 
 
         if (intervals == 0).any(): 
             print("Zero interval!")
         # TODO: grid_ind_float should actually be returned.
-        # grid_ind_float = (np.clip(xyz, min_bound, max_bound - 1e-3) - min_bound) / intervals
-        grid_ind_float = (np.clip(xyz, min_bound, max_bound) - min_bound) / intervals
+        grid_ind_float = (np.clip(xyz, min_bound, max_bound - 1e-3) - min_bound) / intervals
+        # grid_ind_float = (np.clip(xyz, min_bound, max_bound) - min_bound) / intervals
         grid_ind = np.floor(grid_ind_float).astype(np.int)
 
         # process labels
@@ -91,8 +96,96 @@ class DatasetWrapper_NuScenes(data.Dataset):
         processed_label = nb_process_label(np.copy(processed_label), label_voxel_pair)
         data_tuple = (imgs, img_metas, processed_label)
 
-        data_tuple += (grid_ind, labels)
+        data_tuple += (grid_ind_float, labels)
 
+        return data_tuple
+    
+
+from copy import deepcopy
+
+class DatasetWrapper_Occupancy(data.Dataset):
+    def __init__(self, in_dataset, grid_size, fill_label=0,
+                 fixed_volume_space=False, max_volume_space=[51.2, 51.2, 3], 
+                 min_volume_space=[-51.2, -51.2, -5], phase='train', scale_rate=1):
+        'Initialization'
+        self.imagepoint_dataset = in_dataset
+        self.grid_size = np.asarray(grid_size)
+        self.fill_label = fill_label
+        self.fixed_volume_space = fixed_volume_space
+        self.max_volume_space = np.asarray(max_volume_space)
+        self.min_volume_space = np.asarray(min_volume_space)
+        self.interval = (self.max_volume_space - self.min_volume_space) / self.grid_size
+
+        if scale_rate != 1:
+            if phase == 'train':
+                transforms = [
+                    PhotoMetricDistortionMultiViewImage(),
+                    NormalizeMultiviewImage(**pytorch_img_norm_cfg),
+                    RandomScaleImageMultiViewImage([scale_rate]),
+                    PadMultiViewImage(size_divisor=32)
+                ]
+            else:
+                transforms = [
+                    NormalizeMultiviewImage(**pytorch_img_norm_cfg),
+                    RandomScaleImageMultiViewImage([scale_rate]),
+                    PadMultiViewImage(size_divisor=32)
+                ]
+        else:
+            if phase == 'train':
+                transforms = [
+                    PhotoMetricDistortionMultiViewImage(),
+                    NormalizeMultiviewImage(**pytorch_img_norm_cfg),
+                    PadMultiViewImage(size_divisor=32)
+                ]
+            else:
+                transforms = [
+                    NormalizeMultiviewImage(**pytorch_img_norm_cfg),
+                    PadMultiViewImage(size_divisor=32)
+                ]
+        self.transforms = transforms
+
+    def __len__(self):
+        return len(self.imagepoint_dataset)
+
+    def __getitem__(self, index):
+        data = self.imagepoint_dataset[index]
+        imgs, img_metas, occ = data
+
+        # deal with img augmentations
+        imgs_dict = {'img': imgs, 'lidar2img': img_metas['lidar2img']}
+        for t in self.transforms:
+            imgs_dict = t(imgs_dict)
+        imgs = imgs_dict['img']
+        imgs = [img.transpose(2, 0, 1) for img in imgs]
+        img_metas['img_shape'] = imgs_dict['img_shape']
+        img_metas['lidar2img'] = imgs_dict['lidar2img']
+
+        grid_xyz = occ[:, [2, 1, 0]]
+        voxel_label = np.zeros(self.grid_size, dtype=np.uint8)
+        voxel_label[grid_xyz[:, 0], grid_xyz[:, 1], grid_xyz[:, 2]] = occ[:, 3]
+        
+        X, Y, Z = self.grid_size
+        voxel_label_copy = deepcopy(voxel_label)
+        voxel_label_copy = np.reshape(voxel_label_copy, (X // 2, 2, Y // 2, 2, Z // 2, 2))
+        voxel_label_copy = np.transpose(voxel_label_copy, (0, 2, 4, 1, 3, 5))
+        voxel_label_copy = np.sum(voxel_label_copy, axis=(3, 4, 5))
+        large_empty = voxel_label_copy == 0
+        large_empty = np.argwhere(large_empty)
+        voxel_label_copy = voxel_label_copy > 0
+        voxel_label_copy = np.repeat(voxel_label_copy[..., None], 8, -1)
+        voxel_label_copy = np.reshape(voxel_label_copy, (X // 2, Y // 2, Z // 2, 2, 2, 2))
+        voxel_label_copy = np.transpose(voxel_label_copy, (0, 3, 1, 4, 2, 5))
+        voxel_label_copy = np.reshape(voxel_label_copy, (X, Y, Z))
+        small_empty = np.logical_and(voxel_label_copy, voxel_label == 0)
+        small_empty = np.argwhere(small_empty)
+
+        large_empty = (large_empty + 0.5) * 2 * self.interval + self.min_volume_space
+        small_empty = (small_empty + 0.5) * self.interval + self.min_volume_space
+        small_seman = (grid_xyz + 0.5) * self.interval + self.min_volume_space
+        points = np.concatenate([small_seman, small_empty, large_empty], axis=0)
+        labels = np.concatenate([occ[:, 3], np.zeros(small_empty.shape[0] + large_empty.shape[0], dtype=occ.dtype)], axis=0)
+
+        data_tuple = (imgs, img_metas, voxel_label, points, labels)
         return data_tuple
 
 
@@ -125,3 +218,41 @@ def custom_collate_fn(data):
         torch.from_numpy(label2stack), \
         torch.from_numpy(grid_ind_stack), \
         torch.from_numpy(point_label)
+
+
+if __name__ == "__main__":
+    occ = np.load("/data1/code/hyh/github/TPVFormer/data/nuscenes-occupancy/scene_0ac05652a4c44374998be876ba5cd6fd/occupancy/1ac565faae6141788049c96c63e5ee58.npy")
+
+    def func(grid_size, occ):
+        interval = np.asarray([0.2, 0.2, 0.2])
+        grid_xyz = occ[:, [2, 1, 0]]
+        voxel_label = np.zeros(grid_size, dtype=np.uint8)
+        voxel_label[grid_xyz[:, 0], grid_xyz[:, 1], grid_xyz[:, 2]] = occ[:, 3]
+
+        X, Y, Z = grid_size
+        voxel_label_copy = deepcopy(voxel_label)
+        voxel_label_copy = np.reshape(voxel_label_copy, (X // 2, 2, Y // 2, 2, Z // 2, 2))
+        voxel_label_copy = np.transpose(voxel_label_copy, (0, 2, 4, 1, 3, 5))
+        voxel_label_copy = np.sum(voxel_label_copy, axis=(3, 4, 5))
+        large_empty = voxel_label_copy == 0
+        large_empty = np.argwhere(large_empty)
+        voxel_label_copy = voxel_label_copy > 0
+        voxel_label_copy = np.repeat(voxel_label_copy[..., None], 8, -1)
+        voxel_label_copy = np.reshape(voxel_label_copy, (X // 2, Y // 2, Z // 2, 2, 2, 2))
+        voxel_label_copy = np.transpose(voxel_label_copy, (0, 3, 1, 4, 2, 5))
+        voxel_label_copy = np.reshape(voxel_label_copy, (X, Y, Z))
+        small_empty = np.logical_and(voxel_label_copy, voxel_label == 0)
+        small_empty = np.argwhere(small_empty)
+
+        large_empty = (large_empty + 0.5) * 2 * interval
+        small_empty = (small_empty + 0.5) * interval
+        small_seman = (grid_xyz + 0.5) * interval
+        points = np.concatenate([small_seman, small_empty, large_empty], axis=0)
+        labels = np.concatenate([occ[:, 3], np.zeros(small_empty.shape[0] + large_empty.shape[0], dtype=occ.dtype)], axis=0)
+        return points, labels
+
+    points, labels = func(
+        np.asarray([512, 512, 40]),
+        occ
+    )
+    pass

@@ -1,6 +1,6 @@
 import torch
-from dataloader.dataset import ImagePoint_NuScenes
-from dataloader.dataset_wrapper import custom_collate_fn, DatasetWrapper_NuScenes
+from dataloader.dataset import ImagePoint_NuScenes, ImageOcc_NuScenes
+from dataloader.dataset_wrapper import custom_collate_fn, DatasetWrapper_NuScenes, DatasetWrapper_Occupancy
 from nuscenes import NuScenes
 
 
@@ -11,6 +11,7 @@ def build(dataset_config,
           version='v1.0-trainval',
           dist=False,
           scale_rate=1,
+          occ_path=None
     ):
     data_path = train_dataloader_config["data_path"]
     train_imageset = train_dataloader_config["imageset"]
@@ -18,12 +19,18 @@ def build(dataset_config,
     label_mapping = dataset_config["label_mapping"]
 
     nusc = NuScenes(version=version, dataroot=data_path, verbose=True)
-    train_dataset = ImagePoint_NuScenes(data_path, imageset=train_imageset,
-                                     label_mapping=label_mapping, nusc=nusc)
-    val_dataset = ImagePoint_NuScenes(data_path, imageset=val_imageset,
-                                   label_mapping=label_mapping, nusc=nusc)
+    if occ_path is not None:
+        train_dataset = ImageOcc_NuScenes(data_path, occ_path, train_imageset, label_mapping, nusc)
+        val_dataset = ImageOcc_NuScenes(data_path, occ_path, val_imageset, label_mapping, nusc)
+        wrapper_cls = DatasetWrapper_Occupancy
+    else:
+        train_dataset = ImagePoint_NuScenes(data_path, imageset=train_imageset,
+                                        label_mapping=label_mapping, nusc=nusc)
+        val_dataset = ImagePoint_NuScenes(data_path, imageset=val_imageset,
+                                    label_mapping=label_mapping, nusc=nusc)
+        wrapper_cls = DatasetWrapper_NuScenes
 
-    train_dataset = DatasetWrapper_NuScenes(
+    train_dataset = wrapper_cls(
         train_dataset,
         grid_size=grid_size,
         fixed_volume_space=dataset_config['fixed_volume_space'],
@@ -34,7 +41,7 @@ def build(dataset_config,
         scale_rate=scale_rate,
     )
 
-    val_dataset = DatasetWrapper_NuScenes(
+    val_dataset = wrapper_cls(
         val_dataset,
         grid_size=grid_size,
         fixed_volume_space=dataset_config['fixed_volume_space'],
